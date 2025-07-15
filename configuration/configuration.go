@@ -9,10 +9,9 @@ import (
 
 func InitConfig() (*viper.Viper, error) {
 
-	viper.SetConfigName("config")  // name of config file (without extension)
-	viper.SetConfigFile("secrets") // optionally specify config file path
-	viper.SetConfigType("yaml")    // REQUIRED if the config file does not have the extension in the name
-	viper.AddConfigPath(".")       // optionally look for config in the working directory
+	viper.SetConfigName("config") // name of config file (without extension)
+	viper.SetConfigType("yaml")   // REQUIRED if the config file does not have the extension in the name
+	viper.AddConfigPath(".")      // optionally look for config in the working directory
 
 	viper.AutomaticEnv()
 

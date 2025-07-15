@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -8,6 +9,7 @@ import (
 	"net/http"
 	"pix-go/configuration"
 	"pix-go/types"
+	"strings"
 	"time"
 
 	"github.com/openai/openai-go"
@@ -40,6 +42,136 @@ func main() {
 		}
 	})
 
+	http.HandleFunc("/randomMessage", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, "Failed to read body", http.StatusBadRequest)
+			return
+		}
+		var req types.ChatRequest
+		if err := json.Unmarshal(body, &req); err != nil {
+			http.Error(w, "Invalid JSON", http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		content, err := chamadaOpenAIComContexto(req.Message, config.GetString("randomMessage"), "gpt-4.1-2025-04-14", &buffer)
+		if err != nil {
+			http.Error(w, "OpenAI error: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		json.NewEncoder(w).Encode(content)
+		log.Printf("Mensagem Random: %s", content)
+	})
+
+	http.HandleFunc("/randomMessageOllama", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, "Failed to read body", http.StatusBadRequest)
+			return
+		}
+		var req types.ChatRequest
+		if err := json.Unmarshal(body, &req); err != nil {
+			http.Error(w, "Invalid JSON", http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+
+		// Prompt para o Ollama
+		ollamaPrompt := `Você é um agente bancário especializado em operações de PIX.
+Suas funções são:
+- Identificar chave e valor de um PIX,
+- Identificar se o cliente deseja consultar o saldo,
+- Identificar se o cliente deseja alterar o limite transacional do PIX.
+
+Sempre responda em JSON com os seguintes campos:
+- "intencao": pode ser "pix", "saldo" ou "limite"
+- Se "intencao" for "pix", inclua também "valor" (número) e "chave_pix" (string)
+- Se "intencao" for "limite", inclua também "novo_limite" (número)
+- Se "intencao" for "saldo", apenas o campo "intencao" é necessário
+
+Exemplo de resposta para um PIX:
+{"intencao":"pix","valor":100.50,"chave_pix":"email@exemplo.com"}
+
+Exemplo para consulta de saldo:
+{"intencao":"saldo"}
+
+Exemplo para alteração de limite:
+{"intencao":"limite","novo_limite":2000.00}
+
+Responda apenas o JSON, sem explicações.`
+
+		// Monta o payload para o Ollama
+		ollamaPayload := map[string]interface{}{
+			"model":  "qwen3:8b",
+			"think":  false,
+			"stream": false,
+			"messages": []map[string]string{
+				{"role": "system", "content": ollamaPrompt},
+				{"role": "user", "content": req.Message},
+			},
+		}
+		payloadBytes, err := json.Marshal(ollamaPayload)
+		if err != nil {
+			http.Error(w, "Failed to marshal payload", http.StatusInternalServerError)
+			return
+		}
+
+		// Faz a requisição HTTP para o Ollama
+		resp, err := http.Post("http://localhost:11434/v1/chat", "application/json",
+			bytes.NewReader(payloadBytes))
+		if err != nil {
+			http.Error(w, "Erro ao chamar Ollama: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer resp.Body.Close()
+
+		respBody, err := io.ReadAll(resp.Body)
+		if err != nil {
+			http.Error(w, "Erro ao ler resposta do Ollama: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		log.Printf("Resposta do Ollama: %s", respBody)
+
+		// Extrai o conteúdo da resposta do Ollama
+		var ollamaResp struct {
+			Choices []struct {
+				Message struct {
+					Content string `json:"content"`
+				} `json:"message"`
+			} `json:"choices"`
+		}
+		if err := json.Unmarshal(respBody, &ollamaResp); err != nil {
+			http.Error(w, "Resposta do Ollama não é válida: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		content := ollamaResp.Choices[0].Message.Content
+
+		// Remove prefixo "json" se existir
+		content = strings.TrimSpace(content)
+		if strings.HasPrefix(content, "json") {
+			content = strings.TrimSpace(content[4:])
+		}
+
+		// Valida e envia o JSON
+		var jsonResp map[string]interface{}
+		if err := json.Unmarshal([]byte(content), &jsonResp); err != nil {
+			http.Error(w, "Resposta do Ollama não é um JSON válido: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		json.NewEncoder(w).Encode(jsonResp)
+		log.Printf("Mensagem Random Ollama: %s", content)
+	})
+
 	http.HandleFunc("/chat", func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		if r.Method != http.MethodPost {
@@ -62,11 +194,12 @@ func main() {
 		// 	Role:    "user",
 		// 	Content: req.Message,
 		// })
-		content, err := chamadaOpenAIComContexto(req.Message, config.GetString("classificadorPrompt"), openai.ChatModelGPT4_1Nano, &buffer)
+		content, err := chamadaOpenAISemContexto(req.Message, config.GetString("classificadorPrompt"), "gpt-4.1-2025-04-14")
 		if err != nil {
 			http.Error(w, "OpenAI error: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
+
 		json.NewEncoder(w).Encode(content)
 		log.Printf("Intenção classificada: %s", content)
 
@@ -121,17 +254,45 @@ func chamadaOpenAIComContexto(message string, prompt string, model openai.ChatMo
 	messages = append(messages, openai.SystemMessage(prompt))
 	messages = append(messages, openai.UserMessage(message))
 	// Adiciona histórico do buffer
-	// for _, msg := range *buffer {
-	// 	switch msg.Role {
-	// 	case "system":
-	// 		messages = append(messages, openai.SystemMessage(msg.Content))
-	// 		continue
-	// 	case "user":
-	// 		messages = append(messages, openai.UserMessage(msg.Content))
-	// 	case "assistant":
-	// 		messages = append(messages, openai.AssistantMessage(msg.Content))
-	// 	}
-	// }
+	for _, msg := range *buffer {
+		switch msg.Role {
+		case "system":
+			messages = append(messages, openai.SystemMessage(msg.Content))
+			continue
+		case "user":
+			messages = append(messages, openai.UserMessage(msg.Content))
+		case "assistant":
+			messages = append(messages, openai.AssistantMessage(msg.Content))
+		}
+	}
+	chatCompletion, err := client.Chat.Completions.New(context.TODO(), openai.ChatCompletionNewParams{
+		Messages: messages,
+		Model:    model,
+	})
+	if err != nil {
+		return "", err
+	}
+
+	content := chatCompletion.Choices[0].Message.Content
+	// Adiciona resposta da OpenAI ao buffer
+	*buffer = append(*buffer, types.ChatMessage{
+		Role:    "assistant",
+		Content: content,
+	})
+	return content, nil
+}
+
+// Nova função para chamada OpenAI com contexto
+func chamadaOpenAISemContexto(message string, prompt string, model openai.ChatModel) (string, error) {
+	var messages []openai.ChatCompletionMessageParamUnion
+
+	// *buffer = append(*buffer, types.ChatMessage{
+	// 	Role:    "system",
+	// 	Content: prompt,
+	// })
+	messages = append(messages, openai.SystemMessage(prompt))
+	messages = append(messages, openai.UserMessage(message))
+
 	chatCompletion, err := client.Chat.Completions.New(context.TODO(), openai.ChatCompletionNewParams{
 		Messages: messages,
 		Model:    model,
