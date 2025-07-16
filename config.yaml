@@ -51,3 +51,11 @@ randomMessage: "Você é um gerador de frases realistas para treinar IA de atend
                   no caso de saldo, use a palavra 'saldo' ou 'quanto tenho'.
                   no caso de limite, use a palavra 'limite' ou 'quanto posso gastar'
                   **NUNCA** faça perguntas como se fosse o atendente, sempre com ose fosse o cliente"
+randomMessageOllama: "Você é um gerador de frases realistas para treinar IA de atendimento bancário. 
+                      Gere uma frase aleatória, curta e direta, como se fosse uma mensagem de um cliente perguntando sobre saldo, limite diário de transações pix ou realizar um Pix.
+                      No caso de pix, use a palavra 'pix' ou 'transferência' e inclua um valor em reais, como 'R$ 100,00' ou 'R$ 50,00' e a chave pix, como 'CPF 123.456.789-00' ou 'telefone +55 11 91234-5678'
+                      faça também exemplo onde não tenha ou a chave ou o valor
+                      No caso de saldo, use a palavra 'saldo' ou 'quanto tenho'
+                      No caso de limite, use a palavra 'limite' ou 'quanto posso gastar' 
+                      
+                      **NUNCA** faça perguntas como se fosse o atendente, sempre com ose fosse o cliente, não repita mensagens e gere aleatórias entre saldo, limite e pix"

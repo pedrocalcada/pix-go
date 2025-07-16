@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"pix-go/configuration"
 	"pix-go/types"
-	"strings"
 	"time"
 
 	"github.com/openai/openai-go"
@@ -85,38 +84,29 @@ func main() {
 		w.Header().Set("Content-Type", "application/json")
 
 		// Prompt para o Ollama
-		ollamaPrompt := `Você é um agente bancário especializado em operações de PIX.
-Suas funções são:
-- Identificar chave e valor de um PIX,
-- Identificar se o cliente deseja consultar o saldo,
-- Identificar se o cliente deseja alterar o limite transacional do PIX.
-
-Sempre responda em JSON com os seguintes campos:
-- "intencao": pode ser "pix", "saldo" ou "limite"
-- Se "intencao" for "pix", inclua também "valor" (número) e "chave_pix" (string)
-- Se "intencao" for "limite", inclua também "novo_limite" (número)
-- Se "intencao" for "saldo", apenas o campo "intencao" é necessário
-
-Exemplo de resposta para um PIX:
-{"intencao":"pix","valor":100.50,"chave_pix":"email@exemplo.com"}
-
-Exemplo para consulta de saldo:
-{"intencao":"saldo"}
-
-Exemplo para alteração de limite:
-{"intencao":"limite","novo_limite":2000.00}
-
-Responda apenas o JSON, sem explicações.`
+		ollamaPrompt := config.GetString("randomMessageOllama")
 
 		// Monta o payload para o Ollama
+		// Monta as mensagens para o Ollama, incluindo o buffer como mensagens "system"
+		ollamaMessages := []map[string]string{
+			{"role": "system", "content": ollamaPrompt},
+			{"role": "user", "content": req.Message},
+		}
+		// Adiciona o buffer como mensagens "system" (exceto o prompt principal)
+		for _, msg := range buffer {
+			if msg.Role == "system" {
+				ollamaMessages = append(ollamaMessages, map[string]string{
+					"role":    "system",
+					"content": msg.Content,
+				})
+			}
+		}
+
 		ollamaPayload := map[string]interface{}{
-			"model":  "qwen3:8b",
-			"think":  false,
-			"stream": false,
-			"messages": []map[string]string{
-				{"role": "system", "content": ollamaPrompt},
-				{"role": "user", "content": req.Message},
-			},
+			"model":    "qwen3:8b",
+			"think":    false,
+			"stream":   false,
+			"messages": ollamaMessages,
 		}
 		payloadBytes, err := json.Marshal(ollamaPayload)
 		if err != nil {
@@ -125,7 +115,7 @@ Responda apenas o JSON, sem explicações.`
 		}
 
 		// Faz a requisição HTTP para o Ollama
-		resp, err := http.Post("http://localhost:11434/v1/chat", "application/json",
+		resp, err := http.Post("http://localhost:11434/api/chat", "application/json",
 			bytes.NewReader(payloadBytes))
 		if err != nil {
 			http.Error(w, "Erro ao chamar Ollama: "+err.Error(), http.StatusInternalServerError)
@@ -140,35 +130,21 @@ Responda apenas o JSON, sem explicações.`
 		}
 
 		log.Printf("Resposta do Ollama: %s", respBody)
+		var ollamaResp types.OllamaResponse
 
-		// Extrai o conteúdo da resposta do Ollama
-		var ollamaResp struct {
-			Choices []struct {
-				Message struct {
-					Content string `json:"content"`
-				} `json:"message"`
-			} `json:"choices"`
-		}
 		if err := json.Unmarshal(respBody, &ollamaResp); err != nil {
 			http.Error(w, "Resposta do Ollama não é válida: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 
-		content := ollamaResp.Choices[0].Message.Content
+		content := ollamaResp.Message.Content
 
-		// Remove prefixo "json" se existir
-		content = strings.TrimSpace(content)
-		if strings.HasPrefix(content, "json") {
-			content = strings.TrimSpace(content[4:])
-		}
+		buffer = append(buffer, types.ChatMessage{
+			Role:    "system",
+			Content: "Você já gerou essa mensagem: " + content + " gere uma bem diferente",
+		})
 
-		// Valida e envia o JSON
-		var jsonResp map[string]interface{}
-		if err := json.Unmarshal([]byte(content), &jsonResp); err != nil {
-			http.Error(w, "Resposta do Ollama não é um JSON válido: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-		json.NewEncoder(w).Encode(jsonResp)
+		json.NewEncoder(w).Encode(content)
 		log.Printf("Mensagem Random Ollama: %s", content)
 	})
 
@@ -194,11 +170,58 @@ Responda apenas o JSON, sem explicações.`
 		// 	Role:    "user",
 		// 	Content: req.Message,
 		// })
-		content, err := chamadaOpenAISemContexto(req.Message, config.GetString("classificadorPrompt"), "gpt-4.1-2025-04-14")
+		// content, err := chamadaOpenAISemContexto(req.Message, config.GetString("classificadorPrompt"), "gpt-4.1-2025-04-14")
+		// if err != nil {
+		// 	http.Error(w, "OpenAI error: "+err.Error(), http.StatusInternalServerError)
+		// 	return
+		// }
+
+		// Prompt para o Ollama
+		ollamaPrompt := config.GetString("classificadorPrompt")
+
+		// Monta o payload para o Ollama
+		// Monta as mensagens para o Ollama, incluindo o buffer como mensagens "system"
+		ollamaMessages := []map[string]string{
+			{"role": "system", "content": ollamaPrompt},
+			{"role": "user", "content": req.Message},
+		}
+
+		ollamaPayload := map[string]interface{}{
+			"model":    "qwen3:8b",
+			"think":    false,
+			"stream":   false,
+			"messages": ollamaMessages,
+		}
+		payloadBytes, err := json.Marshal(ollamaPayload)
 		if err != nil {
-			http.Error(w, "OpenAI error: "+err.Error(), http.StatusInternalServerError)
+			http.Error(w, "Failed to marshal payload", http.StatusInternalServerError)
 			return
 		}
+
+		// Faz a requisição HTTP para o Ollama
+		resp, err := http.Post("http://localhost:11434/api/chat", "application/json",
+			bytes.NewReader(payloadBytes))
+		if err != nil {
+			http.Error(w, "Erro ao chamar Ollama: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer resp.Body.Close()
+
+		respBody, err := io.ReadAll(resp.Body)
+		if err != nil {
+			http.Error(w, "Erro ao ler resposta do Ollama: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		log.Printf("Resposta do Ollama: %s", respBody)
+		var ollamaResp types.OllamaResponse
+
+		if err := json.Unmarshal(respBody, &ollamaResp); err != nil {
+			http.Error(w, "Resposta do Ollama não é válida: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		content := ollamaResp.Message.Content
 
 		json.NewEncoder(w).Encode(content)
 		log.Printf("Intenção classificada: %s", content)
